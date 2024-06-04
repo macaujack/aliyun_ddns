@@ -1,14 +1,92 @@
 #!/bin/sh
 
+echo2() {
+    echo "$@" 1>&2
+}
+
+echon() {
+    printf '%s' "$1"
+}
+
 # Echo 这个脚本所处的目录，最后不包含这个脚本的文件名
 getScriptDir() {
     script=$(readlink -f "$0")
     scriptDir=$(dirname "$script")
-    echo "$scriptDir"
+    echon "$scriptDir"
 }
 
-echo2() {
-    echo "$@" 1>&2
+# Echo 本机的 IPv4 地址
+getMachineIpv4() {
+    # TODO: Complete this function
+    echon "192.168.2.1"
+}
+
+# Echo 本机的 IPv6 地址，会尽量选择永久（非临时）的地址
+getMachineIpv6() {
+    # TODO: Complete this function
+    echon "fd17::1"
+}
+
+# Echo 给定的单个字符的 UTF-8 编码，比如参数为「夏」则返回「%e5%a4%8f」
+getUtf8Hex() {
+    ch="$1"
+    length=${#ch}
+    if [ "$length" -ne 1 ]; then
+        echo "err"
+        return
+    fi
+
+    echon "$ch" | hexdump -ve '/1 "_%02x"' | tr '_' '%'
+}
+
+# Echo 给定的字符串的 url encode 之后的结果，支持包括中文在内的国际字符
+urlEncode() {
+    str="$1"
+    chs=$(echon "$str" | sed -e 's/\(.\)/\1\n/g')
+    ret=""
+    for c in $chs; do
+        case "$c" in
+        [-_.~a-zA-Z0-9])
+            enc="$c"
+            ;;
+        *)
+            enc=$(getUtf8Hex "$c")
+            if [ "$enc" = "err" ]; then
+                echon ""
+                return
+            fi
+            ;;
+        esac
+        ret="${ret}${enc}"
+    done
+    echon "$ret"
+}
+
+# Param1: Canonical query string
+# Param2: 请求头中 "x-acs_action" 的值，也就是 API 名字，如 DescribeSubDomainRecords
+# Param3: 请求头中 "x-acs-date" 的值，如 2024-06-04T08:52:00Z
+# Param4: 请求头中 "x-acs-signature-nonce" 的值，如 00112233445566778899aabbccddeeff
+# 根据这些参数 echo 一个 raw JSON
+callAliDnsOpenApi() {
+    canonicalRequest="POST
+/
+${1}
+host:alidns.cn-hangzhou.aliyuncs.com
+x-acs-action:${2}
+x-acs-date:${3}
+x-acs-signature-nonce: ${4}
+x-acs-version:2015-01-09
+
+host;x-acs-action;x-acs-date;x-acs-signature-nonce;x-acs-version
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
+
+# 调阿里的 Open API 获取单个 sub domain 的解析记录，echo 逗号分隔字符串，格式如下：
+# A,192.168.2.1
+# AAAA,fd17::1
+describeSubDomainRecords() {
+    subDomain=$(urlEncode "$1")
+    # TODO: Complete this function
 }
 
 main() {
@@ -48,5 +126,3 @@ EOL
 }
 
 main
-
-# echo "hello world" | tr -d '\n' | hexdump -ve '/1 "_%02x"' | tr '_' '%'
