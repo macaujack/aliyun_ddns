@@ -254,10 +254,10 @@ IPV6_DDNS=true
 
 ##################### 选填项 ###########################
 
-# 自定义的获取本机 IPv4 的命令，若留空则为默认方式。一个例子是 "curl 4.ipw.cn"
-GET_IPV4_COMMAND=
-# 自定义的获取本机 IPv6 的命令，若留空则为默认方式
-GET_IPV6_COMMAND=
+# 自定义的本机 IPv4 地址，注意此处可以使用 $() 来以命令方式获取 IP 地址，不一定是硬编码一个地址
+MACHINE_IPV4=
+# 自定义的本机 IPv6 地址，注意此处可以使用 $() 来以命令方式获取 IP 地址，不一定是硬编码一个地址
+MACHINE_IPV6=
 EOL
 
         retVal=$?
@@ -314,21 +314,13 @@ handleSubDomain() {
         if [ "$type" = "A" ] && [ "$IPV4_DDNS" = "true" ]; then
             if [ "$MACHINE_IPV4" = "" ]; then
                 log verb "首次获取真实 IPv4 地址，结果将会缓存，不会再次调用获取真实地址的命令"
-                if [ "$GET_IPV4_COMMAND" = "" ]; then
-                    MACHINE_IPV4=$(getMachineIpv4)
-                else
-                    MACHINE_IPV4=$(sh -c "$GET_IPV4_COMMAND")
-                fi
+                MACHINE_IPV4=$(getMachineIpv4)
             fi
             gtValue="$MACHINE_IPV4"
         elif [ "$type" = "AAAA" ] && [ "$IPV6_DDNS" = "true" ]; then
             if [ "$MACHINE_IPV6" = "" ]; then
                 log verb "首次获取真实 IPv6 地址，结果将会缓存，不会再次调用获取真实地址的命令"
-                if [ "$GET_IPV6_COMMAND" = "" ]; then
-                    MACHINE_IPV6=$(getMachineIpv6)
-                else
-                    MACHINE_IPV6=$(sh -c "$GET_IPV6_COMMAND")
-                fi
+                MACHINE_IPV6=$(getMachineIpv6)
             fi
             gtValue="$MACHINE_IPV6"
         fi
