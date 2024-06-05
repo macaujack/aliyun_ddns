@@ -1,7 +1,23 @@
 #!/bin/sh
 
-echo2() {
-    echo "$@" 1>&2
+log() {
+    level="$1"
+    text="$2"
+    case "$level" in
+    "debug" | "Debug" | "DEBUG") color='\033[0;36m' ;; # Cyan
+    "verb" | "Verb" | "VERB") color='\033[0;37m' ;;    # Gray
+    "info" | "Info" | "INFO") color='\033[0;32m' ;;    # Green
+    "warn" | "Warn" | "WARN") color='\033[0;33m' ;;    # Yellow
+    "error" | "Error" | "ERROR") color='\033[0;31m' ;; # Red
+    *)
+        color="\033[0;35m" # Purple
+        level="UNKNOWN"
+        ;;
+    esac
+
+    level=$(printf '%s' "$level" | tr '[:lower:]' '[:upper:]')
+    date=$(date +%Y-%m-%dT%H:%M:%S)
+    printf '%b\n' "${color}${date} <${level}> ${text}\033[0m" 1>&2
 }
 
 echon() {
@@ -32,20 +48,25 @@ getUtf8Hex() {
     ch="$1"
     length=${#ch}
     if [ "$length" -ne 1 ]; then
+        log error "Length of 「${ch}」: ${length}"
         echo "err"
         return
     fi
 
-    echon "$ch" | hexdump -ve '/1 "_%02X"' | tr '_' '%'
+    enc=$(echon "$ch" | hexdump -ve '/1 "_%02X"' | tr '_' '%')
+    log verb "UTF-8 of 「${ch}」 is 「${enc}」"
+    echon "$enc"
 }
 
-# Echo 给定的字符串的 url encode 之后的结果，支持包括中文在内的国际字符，
+# Echo 给定的单行字符串的 url encode 之后的结果，支持包括中文在内的国际字符，
 # 比如参数为「www.例子.中国」，则返回「www.%E4%BE%8B%E5%AD%90.%E4%B8%AD%E5%9B%BD」
 urlEncode() {
     str="$1"
-    chs=$(echon "$str" | sed -e 's/\(.\)/\1\n/g')
+    length=${#str}
     ret=""
-    for c in $chs; do
+    i=1
+    while [ "$i" -le "$length" ]; do
+        c=$(echon "$str" | cut -c "$i")
         case "$c" in
         [-_.~a-zA-Z0-9])
             enc="$c"
@@ -58,8 +79,12 @@ urlEncode() {
             fi
             ;;
         esac
+
         ret="${ret}${enc}"
+        i=$((i + 1))
     done
+
+    log verb "URL encode for 「${str}」 is 「${ret}」"
     echon "$ret"
 }
 
@@ -125,14 +150,14 @@ describeSubDomainRecords() {
 # 读取配置文件，若配置文件不存在，则新建一个并退出
 readConfigFile() {
     configPath="$(getScriptDir)/config.sh"
-    echo2 "准备读取配置文件：${configPath}"
+    log info "准备读取配置文件：${configPath}"
     if [ ! -r "$configPath" ]; then
         if [ -f "$configPath" ]; then
-            echo2 "虽然配置文件存在，但是当前系统用户无配置文件的 Read 权限，脚本退出"
+            log error "虽然配置文件存在，但是当前系统用户无配置文件的 Read 权限，脚本退出"
             exit 1
         fi
 
-        echo2 "配置文件不存在，准备新建配置文件"
+        log info "配置文件不存在，准备新建配置文件"
 
         cat >"$configPath" <<EOL
 #!/bin/sh
@@ -145,13 +170,13 @@ EOL
 
         retVal=$?
         if [ "$retVal" -ne 0 ]; then
-            echo2 "由于未知错误，无法创建配置文件，脚本退出"
+            log error "由于未知错误，无法创建配置文件，脚本退出"
             exit 99
         fi
         chmod a-x "$configPath"
         chmod u+wr "$configPath"
-        echo2 "已创建配置文件：${configPath}"
-        echo2 "脚本将要退出，请手动编辑配置文件后再次运行此脚本"
+        log info "已创建配置文件：${configPath}"
+        log info "脚本将要退出，请手动编辑配置文件后再次运行此脚本"
         exit 2
     fi
 
