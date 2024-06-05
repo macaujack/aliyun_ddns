@@ -31,16 +31,20 @@ getScriptDir() (
     echon "$scriptDir"
 )
 
-# Echo 本机的 IPv4 地址
+# Echo 本机的 IPv4 地址。当配置文件中 GET_IPV4_COMMAND 为空时，就会默认调用此函数
 getMachineIpv4() (
-    # TODO: Complete this function
-    echon "192.168.2.1"
+    curl -s 4.ipw.cn
 )
 
-# Echo 本机的 IPv6 地址，会尽量选择永久（非临时）的地址
+# Echo 本机的 IPv6 地址。当配置文件中 GET_IPV6_COMMAND 为空时，就会默认调用此函数。
+# 需要注意，对于 IPv6 地址而言，每台设备或者每个网口都可能有多个公网 IPv6 地址，其中有一个是「永久」地址，
+# 也就是只要运营商分配的前缀不变，就永远不会变。如果用目前采用的 curl 的方式，是获取不到这个永久地址的，
+# 这是出于隐私保护的目的，当我们发起网络请求时，操作系统会使用非永久、临时的地址，这个基本上一天一变。不过既然
+# 用了 DDNS 技术，是不是其实也没什么所谓？
+#
+# 如果一定想要获得永久地址，可以调「ip -6 addr」命令，然后自己 grep/sed 出来想要的那个地址
 getMachineIpv6() (
-    # TODO: Complete this function
-    echon "fd17::1"
+    curl -s 6.ipw.cn
 )
 
 # Echo 给定的单个字符的 UTF-8 编码，比如参数为「夏」则返回「%E5%A4%8F」
@@ -296,8 +300,7 @@ checkAndUpdateRecord() (
 )
 
 # 各个域名之间是独立处理、互不影响的，该函数处理单个域名
-handleSubDomain() (
-    subDomain="$1"
+handleSubDomain() {
     records=$(describeSubDomainRecords "$subDomain")
 
     # 处理该子域名的每个记录
@@ -309,17 +312,25 @@ handleSubDomain() (
         gtValue="gtValue"
 
         if [ "$type" = "A" ] && [ "$IPV4_DDNS" = "true" ]; then
-            if [ ${#GET_IPV4_COMMAND} -eq 0 ]; then
-                gtValue=$(getMachineIpv4)
-            else
-                gtValue=$(sh -c "$GET_IPV4_COMMAND")
+            if [ "$MACHINE_IPV4" = "" ]; then
+                log verb "首次获取真实 IPv4 地址，结果将会缓存，不会再次调用获取真实地址的命令"
+                if [ "$GET_IPV4_COMMAND" = "" ]; then
+                    MACHINE_IPV4=$(getMachineIpv4)
+                else
+                    MACHINE_IPV4=$(sh -c "$GET_IPV4_COMMAND")
+                fi
             fi
+            gtValue="$MACHINE_IPV4"
         elif [ "$type" = "AAAA" ] && [ "$IPV6_DDNS" = "true" ]; then
-            if [ ${#GET_IPV6_COMMAND} -eq 0 ]; then
-                gtValue=$(getMachineIpv6)
-            else
-                gtValue=$(sh -c "$GET_IPV6_COMMAND")
+            if [ "$MACHINE_IPV6" = "" ]; then
+                log verb "首次获取真实 IPv6 地址，结果将会缓存，不会再次调用获取真实地址的命令"
+                if [ "$GET_IPV6_COMMAND" = "" ]; then
+                    MACHINE_IPV6=$(getMachineIpv6)
+                else
+                    MACHINE_IPV6=$(sh -c "$GET_IPV6_COMMAND")
+                fi
             fi
+            gtValue="$MACHINE_IPV6"
         fi
 
         if [ "$gtValue" = "gtValue" ]; then
@@ -335,7 +346,7 @@ handleSubDomain() (
     done <<EOL
 ${records}
 EOL
-)
+}
 
 main() {
     readConfigFile
