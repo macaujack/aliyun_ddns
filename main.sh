@@ -199,6 +199,21 @@ EOL
     echon "$ret"
 }
 
+# 调阿里的 Open API 更新单个解析记录。
+# Param1: Record ID
+# Param2: RR，（即主机记录，比如 www, @, 测试），支持包括中文在内的国际字符
+# Param3: Type （即记录类型，比如 A, AAAA, CNAME, TXT）
+# Param4: Value
+updateDomainRecord() {
+    recordId="$1"
+    rr=$(urlEncode "$2") || return 1
+    type="$3"
+    value="$4"
+    canonicalQueryString="RR=${rr}&RecordId=${recordId}&Type=${type}&Value=${value}"
+    rawJson=$(callAliDnsOpenApi "$canonicalQueryString" "UpdateDomainRecord" "$ACCESS_KEY_ID" "$ACCESS_KEY_SECRET") || return 2
+    checkIfApiCallSuccess "$rawJson" || return 3
+}
+
 # 读取配置文件，若配置文件不存在，则新建一个并退出
 readConfigFile() {
     configPath="$(getScriptDir)/config.sh"
