@@ -49,8 +49,7 @@ getUtf8Hex() {
     length=${#ch}
     if [ "$length" -ne 1 ]; then
         log error "Length of 「${ch}」: ${length}"
-        echo "err"
-        return
+        return 1
     fi
 
     enc=$(echon "$ch" | hexdump -ve '/1 "_%02X"' | tr '_' '%')
@@ -73,9 +72,10 @@ urlEncode() {
             ;;
         *)
             enc=$(getUtf8Hex "$c")
-            if [ "$enc" = "err" ]; then
-                echon ""
-                return
+            retVal=$?
+            if [ "$retVal" -ne 0 ]; then
+                log error "无法对「${str}」进行 url encode"
+                return 1
             fi
             ;;
         esac
@@ -125,6 +125,8 @@ ${hashedCanonicalRequest}"
 
     authorization="ACS3-HMAC-SHA256 Credential=${accessKeyId},SignedHeaders=${signedHeaders},Signature=${signature}"
     url="${host}/?${canonicalQueryString}"
+
+    log verb "准备发送 HTTP 请求……"
     rawJson=$(curl -s -X POST \
         -H "Authorization: $authorization" \
         -H "host: $host" \
@@ -134,17 +136,67 @@ ${hashedCanonicalRequest}"
         -H "x-acs-signature-nonce: $xAcsSignatureNonce" \
         -H "x-acs-version: $xAcsVersion" \
         "$url")
+    retVal=$?
+    if [ "$retVal" -ne 0 ]; then
+        log error "HTTP 请求失败，可能是断网了"
+        return 1
+    fi
+    log verb "🥰 HTTP 请求成功"
     echon "$rawJson"
 }
 
-# 调阿里的 Open API 获取单个 sub domain 的解析记录，echo 逗号分隔字符串，格式如下：
-# A,192.168.2.1
-# AAAA,fd17::1
+# 用来检查返回的 raw JSON 里是否不存在 "Code" 字段，若不存在则为成功
+# Param1: Raw JSON
+checkIfApiCallSuccess() {
+    echon "$rawJson" | grep -E '"Code" *: *"[a-zA-Z0-9.]+"'
+    retVal=$?
+    if [ "$retVal" -eq 0 ]; then
+        log error "HTTP 请求成功，但是存在业务错误（比如参数不合法）。原始 JSON 返回值为「${rawJson}」"
+        return 1
+    fi
+}
+
+# 获取一个 JSON 对象（不可是数组）的一个 key 对应的值（该值类型必须为字符串）
+# Param1: Raw JSON
+# Param2: key 的名字
+getJsonStringValueOfKey() {
+    regex=$(printf 's/^.*"%s" *: *"([^"]+)".*$/\\1/p' "$2")
+    echon "$1" | sed -nE "$regex"
+}
+
+# 调阿里的 Open API 获取单个 sub domain 的解析记录，echo 一个用制表符分隔的多行字符串，一行表示一种类型的记录，
+# 需要注意第 2 个字段是 RR（即主机记录），由于这个函数是用来查询某个给定 SubDomain 的所有记录，因此结果里每行的
+# RR 都是一样的，比如输入参数为「www.example.com」，那么所有记录的 RR 都是 www。
+# 格式如下（第一个是 Record ID，\t 是制表符）
+# 666666660000000000\twww\tA\t192.168.2.1
+# 666666660000000001\twww\tAAAA\tfd17::1
+# 666666660000000002\twww\tTXT\tsometext
 describeSubDomainRecords() {
-    subDomain=$(urlEncode "$1")
-    rawJson=$(callAliDnsOpenApi "SubDomain=${subDomain}" "DescribeSubDomainRecords" "$ACCESS_KEY_ID" "$ACCESS_KEY_SECRET")
-    # TODO: grep useful info from raw JSON
-    echon "$rawJson"
+    subDomain=$(urlEncode "$1") || return 1
+    rawJson=$(callAliDnsOpenApi "SubDomain=${subDomain}" "DescribeSubDomainRecords" "$ACCESS_KEY_ID" "$ACCESS_KEY_SECRET") || return 2
+    checkIfApiCallSuccess "$rawJson" || return 3
+
+    records=$(echon "$rawJson" | sed -nE 's/^.*"Record" *: *(\[.+\]).*$/\1/p')
+    if [ ${#records} -eq 0 ]; then
+        log error "HTTP 请求成功且没有业务错误，但是无法匹配预期的字符串，请联系脚本作者检查服务器返回的 JSON 格式和匹配规则"
+        return 4
+    fi
+
+    records=$(echon "$records" | grep -oE '\{[^}]+\}')
+    ret=""
+    while read -r record; do
+        recordId=$(getJsonStringValueOfKey "$record" "RecordId")
+        rr=$(getJsonStringValueOfKey "$record" "RR")
+        type=$(getJsonStringValueOfKey "$record" "Type")
+        value=$(getJsonStringValueOfKey "$record" "Value")
+        tem=$(printf '%s\t%s\t%s\t%s' "$recordId" "$rr" "$type" "$value")
+        ret="${ret}${tem}
+"
+    done <<EOL
+${records}
+EOL
+
+    echon "$ret"
 }
 
 # 读取配置文件，若配置文件不存在，则新建一个并退出
@@ -182,6 +234,7 @@ EOL
 
     # shellcheck disable=SC1090
     . "$configPath"
+    log info "已载入配置文件，准备正式执行脚本"
 }
 
 main() {
