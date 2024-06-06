@@ -31,12 +31,16 @@ getScriptDir() (
     echon "$scriptDir"
 )
 
-# Echo 本机的 IPv4 地址。当配置文件中 GET_IPV4_COMMAND 为空时，就会默认调用此函数
+# Echo 本机的 IPv4 地址。当配置文件中 MACHINE_IPV4 为空时，就会默认调用此函数获取地址
 getMachineIpv4() (
     curl -s 4.ipw.cn
+    retVal=$?
+    if [ "$retVal" -ne 0 ]; then
+        log warn "无法 curl 4.ipw.cn ，是断网了吗"
+    fi
 )
 
-# Echo 本机的 IPv6 地址。当配置文件中 GET_IPV6_COMMAND 为空时，就会默认调用此函数。
+# Echo 本机的 IPv6 地址。当配置文件中 MACHINE_IPV6 为空时，就会默认调用此函数获取地址。
 # 需要注意，对于 IPv6 地址而言，每台设备或者每个网口都可能有多个公网 IPv6 地址，其中有一个是「永久」地址，
 # 也就是只要运营商分配的前缀不变，就永远不会变。如果用目前采用的 curl 的方式，是获取不到这个永久地址的，
 # 这是出于隐私保护的目的，当我们发起网络请求时，操作系统会使用非永久、临时的地址，这个基本上一天一变。不过既然
@@ -45,6 +49,10 @@ getMachineIpv4() (
 # 如果一定想要获得永久地址，可以调「ip -6 addr」命令，然后自己 grep/sed 出来想要的那个地址
 getMachineIpv6() (
     curl -s 6.ipw.cn
+    retVal=$?
+    if [ "$retVal" -ne 0 ]; then
+        log warn "无法 curl 6.ipw.cn ，可能是网络环境不支持 IPv6 ，或者断网"
+    fi
 )
 
 # Echo 给定的单个字符的 UTF-8 编码，比如参数为「夏」则返回「%E5%A4%8F」
@@ -170,7 +178,8 @@ getJsonStringValueOfKey() (
 # 调阿里的 Open API 获取单个 sub domain 的解析记录，echo 一个用制表符分隔的多行字符串，一行表示一种类型的记录，
 # 需要注意第 2 个字段是 RR（即主机记录），由于这个函数是用来查询某个给定 SubDomain 的所有记录，因此结果里每行的
 # RR 都是一样的，比如输入参数为「www.example.com」，那么所有记录的 RR 都是 www。
-# 格式如下（第一个是 Record ID，\t 是制表符）
+# Param1: Sub domain
+# 返回值格式如下（第一个是 Record ID，\t 是制表符）
 # 666666660000000000\twww\tA\t192.168.2.1
 # 666666660000000001\twww\tAAAA\tfd17::1
 # 666666660000000002\twww\tTXT\tsometext
@@ -225,12 +234,12 @@ callUpdateDomainRecord() (
 
 # 读取配置文件，若配置文件不存在，则新建一个并退出
 readConfigFile() {
-    configPath="$(getScriptDir)/config.sh"
+    configPath="$(getScriptDir)/aliyun_ddns_config.sh"
     log info "准备读取配置文件：${configPath}"
     if [ ! -r "$configPath" ]; then
         if [ -f "$configPath" ]; then
             log error "虽然配置文件存在，但是当前系统用户无配置文件的 Read 权限，脚本退出"
-            exit 1
+            return 1
         fi
 
         log info "配置文件不存在，准备新建配置文件"
@@ -253,22 +262,22 @@ IPV6_DDNS=true
 
 ##################### 选填项 ###########################
 
-# 自定义的本机 IPv4 地址，注意此处可以使用 $() 来以命令方式获取 IP 地址，不一定是硬编码一个地址
+# 自定义的本机 IPv4 地址，注意此处可以使用 \$(command) 来以命令方式获取 IP 地址，不一定是硬编码一个定值
 MACHINE_IPV4=
-# 自定义的本机 IPv6 地址，注意此处可以使用 $() 来以命令方式获取 IP 地址，不一定是硬编码一个地址
+# 自定义的本机 IPv6 地址，注意此处可以使用 \$(command) 来以命令方式获取 IP 地址，不一定是硬编码一个定值
 MACHINE_IPV6=
 EOL
 
         retVal=$?
         if [ "$retVal" -ne 0 ]; then
             log error "由于未知错误，无法创建配置文件，脚本退出"
-            exit 99
+            return 99
         fi
         chmod a-x "$configPath"
         chmod u+wr "$configPath"
         log info "已创建配置文件：${configPath}"
         log info "脚本将要退出，请手动编辑配置文件后再次运行此脚本"
-        exit 2
+        return 2
     fi
 
     # shellcheck disable=SC1090
@@ -289,7 +298,7 @@ checkAndUpdateRecord() {
 
 # 各个域名之间是独立处理、互不影响的，该函数处理单个域名
 handleSubDomain() {
-    records=$(callDescribeSubDomainRecords "$subDomain")
+    records=$(callDescribeSubDomainRecords "$subDomain") || return 1
 
     # 处理该子域名的每个记录
     while read -r record; do
@@ -322,7 +331,7 @@ handleSubDomain() {
             continue
         fi
 
-        checkAndUpdateRecord "$recordId" "$rr" "$type" "$value" "$gtValue"
+        checkAndUpdateRecord "$recordId" "$rr" "$type" "$value" "$gtValue" || return 2
     done <<EOL
 ${records}
 EOL
@@ -382,30 +391,30 @@ main() {
         return
     fi
 
-    readConfigFile
+    readConfigFile || return 2
 
     if [ "$1" = "update" ]; then
         if [ "$#" -ne 4 ]; then
             log error "命令格式错误，正确的用法为： ${0} update <子域名> <记录类型> <新记录值>"
-            return 1
+            return 3
         fi
 
         subDomain="$2"
         matchType="$3"
         newValue="$4"
         log info "准备把域名 \\033[4m「${subDomain}」\\033[24m 的所有 ${matchType} 类型记录的值更新为 ${newValue}"
-        updateDns || return 2
+        updateDns || return 4
         return
     fi
 
     if [ "$1" = "get" ]; then
         if [ "$#" -ne 2 ]; then
             log error "命令格式错误，正确用法为： ${0} get <子域名>"
-            return 1
+            return 5
         fi
 
         log info "准备打印域名 \\033[4m「${2}」\\033[24m 的所有记录到 stdout"
-        callDescribeSubDomainRecords "$2" || return 2
+        callDescribeSubDomainRecords "$2" || return 6
         return
     fi
 
@@ -416,8 +425,11 @@ main() {
         subDomainCount=$((subDomainCount + 1))
         log info "-------------------------------------------------------------------------------"
         log info "开始处理域名#${subDomainCount}: \\033[4m${subDomain}\\033[24m"
-        handleSubDomain "$subDomain"
+        handleSubDomain "$subDomain" || return 7
     done
 }
 
+log info "一个功能极简的阿里云 DDNS 小脚本"
+log info "GitHub repo: https://github.com/macaujack/aliyun_ddns"
+log info "若使用时有问题，请在 GitHub 上开 issue ，或者 email 联系作者 yanxfu@gmail.com"
 main "$@"
