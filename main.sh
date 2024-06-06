@@ -57,7 +57,6 @@ getUtf8Hex() (
     fi
 
     enc=$(echon "$ch" | hexdump -ve '/1 "_%02X"' | tr '_' '%')
-    log verb "UTF-8 of 「${ch}」 is 「${enc}」"
     echon "$enc"
 )
 
@@ -175,7 +174,7 @@ getJsonStringValueOfKey() (
 # 666666660000000000\twww\tA\t192.168.2.1
 # 666666660000000001\twww\tAAAA\tfd17::1
 # 666666660000000002\twww\tTXT\tsometext
-describeSubDomainRecords() (
+callDescribeSubDomainRecords() (
     subDomain=$(urlEncode "$1") || return 1
     rawJson=$(callAliDnsOpenApi "SubDomain=${subDomain}" "DescribeSubDomainRecords" "$ACCESS_KEY_ID" "$ACCESS_KEY_SECRET") || return 2
     checkIfApiCallSuccess "$rawJson" || return 3
@@ -214,7 +213,7 @@ EOL
 # Param2: RR，（即主机记录，比如 www, @, 测试），支持包括中文在内的国际字符
 # Param3: Type （即记录类型，比如 A, AAAA, CNAME, TXT）
 # Param4: Value
-updateDomainRecord() (
+callUpdateDomainRecord() (
     recordId=$(urlEncode "$1") || return 1
     rr=$(urlEncode "$2") || return 1
     type=$(urlEncode "$3") || return 1
@@ -274,34 +273,23 @@ EOL
 
     # shellcheck disable=SC1090
     . "$configPath"
-    log info "已载入配置文件，准备正式执行脚本"
+    log info "已载入配置文件"
 }
 
-# 判断当前值是否需要更新，若需要则调 Open API
-# Param1: Record ID
-# Param2: RR
-# Param3: Type
-# Param4: Value
-# Param5: Ground truth value
-checkAndUpdateRecord() (
-    recordId="$1"
-    rr="$2"
-    type="$3"
-    value="$4"
-    gtValue="$5"
-
+# 判断当前的记录值是否需要更新，若需要则调 Open API
+checkAndUpdateRecord() {
     if [ "$value" = "$gtValue" ]; then
         log info "\\033[1m${type} 类型\\033[22m: 解析记录与实际一致，不需要更新。记录值为「${gtValue}」"
         return
     fi
 
     log info "\\033[1m${type} 类型\\033[22m: 即将更新记录。解析记录值为「${value}」，真实值应为「${gtValue}」"
-    updateDomainRecord "$recordId" "$rr" "$type" "$gtValue"
-)
+    callUpdateDomainRecord "$recordId" "$rr" "$type" "$gtValue"
+}
 
 # 各个域名之间是独立处理、互不影响的，该函数处理单个域名
 handleSubDomain() {
-    records=$(describeSubDomainRecords "$subDomain")
+    records=$(callDescribeSubDomainRecords "$subDomain")
 
     # 处理该子域名的每个记录
     while read -r record; do
@@ -340,11 +328,89 @@ ${records}
 EOL
 }
 
+testutf8() {
+    gtEnc=$(urlEncode "$1")
+    if [ "$2" != "$gtEnc" ]; then
+        echo "Something wrong with UTF-8 encoding"
+        return 1
+    fi
+}
+
+updateDns() {
+    records=$(callDescribeSubDomainRecords "$subDomain")
+
+    # 处理该子域名的每个记录
+    while read -r record; do
+        recordId=$(echon "$record" | cut -f 1)
+        rr=$(echon "$record" | cut -f 2)
+        type=$(echon "$record" | cut -f 3)
+        value=$(echon "$record" | cut -f 4)
+
+        if [ "$type" != "$matchType" ]; then
+            continue
+        fi
+
+        log info "找到该域名的 ${matchType} 类型记录, ID 为 ${recordId}, 记录值为 ${value}"
+        if [ "$newValue" = "$value" ]; then
+            log info "不需要更新"
+        else
+            log info "准备更新记录值为 ${newValue}"
+            callUpdateDomainRecord "$recordId" "$rr" "$matchType" "$newValue" || return 1
+            updated=true
+            log info "更新成功"
+        fi
+
+    done <<EOL
+${records}
+EOL
+
+    if [ "$updated" != "true" ]; then
+        log warn "未找到任何该域名的 ${matchType} 类型记录"
+    fi
+}
+
 main() {
+    # 做一个简单的测试，检查 urlEncode 函数能否正常工作
+    if [ "$#" -eq 1 ] && [ "$1" = "testutf8" ]; then
+        log info "准备执行 UTF-8 测试，仅当测试通过， urlEncode 函数才能正常工作"
+        testutf8 "www.example.com" "www.example.com" || return 1
+        testutf8 "测试.例子.中国" "%E6%B5%8B%E8%AF%95.%E4%BE%8B%E5%AD%90.%E4%B8%AD%E5%9B%BD" || return 1
+        testutf8 "随便一句话, mixed with English, and-some_symbols." "%E9%9A%8F%E4%BE%BF%E4%B8%80%E5%8F%A5%E8%AF%9D%2C%20mixed%20with%20English%2C%20and-some_symbols." || return 1
+        testutf8 "繁體中文也可。日本語も可。" "%E7%B9%81%E9%AB%94%E4%B8%AD%E6%96%87%E4%B9%9F%E5%8F%AF%E3%80%82%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%82%E5%8F%AF%E3%80%82" || return 1
+        testutf8 "www.café.gg" "www.caf%C3%A9.gg" || return 1
+        log info "测试通过， urlEncode 可以正常工作"
+        return
+    fi
+
     readConfigFile
 
-    SUB_DOMAINS=$(echon "$SUB_DOMAINS" | tr ',' ' ')
+    if [ "$1" = "update" ]; then
+        if [ "$#" -ne 4 ]; then
+            log error "命令格式错误，正确的用法为： ${0} update <子域名> <记录类型> <新记录值>"
+            return 1
+        fi
 
+        subDomain="$2"
+        matchType="$3"
+        newValue="$4"
+        log info "准备把域名 \\033[4m「${subDomain}」\\033[24m 的所有 ${matchType} 类型记录的值更新为 ${newValue}"
+        updateDns || return 2
+        return
+    fi
+
+    if [ "$1" = "get" ]; then
+        if [ "$#" -ne 2 ]; then
+            log error "命令格式错误，正确用法为： ${0} get <子域名>"
+            return 1
+        fi
+
+        log info "准备打印域名 \\033[4m「${2}」\\033[24m 的所有记录到 stdout"
+        callDescribeSubDomainRecords "$2" || return 2
+        return
+    fi
+
+    log info "准备正式跑 DDNS 逻辑"
+    SUB_DOMAINS=$(echon "$SUB_DOMAINS" | tr ',' ' ')
     subDomainCount=0
     for subDomain in $SUB_DOMAINS; do
         subDomainCount=$((subDomainCount + 1))
@@ -354,4 +420,4 @@ main() {
     done
 }
 
-main
+main "$@"
