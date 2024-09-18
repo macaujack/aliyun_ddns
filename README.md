@@ -28,6 +28,8 @@
 - printf（应该是系统自带？）
 - readlink（应该是系统自带？）
 - dirname（应该是系统自带？）
+- head（应该是系统自带？）
+- tail（应该是系统自带？）
 - hexdump
 - curl
 - openssl
@@ -78,13 +80,13 @@ foreach (subDomain in SUB_DOMAINS) {
 接下来我们用 `sed` 命令把永久地址抠出来。在我的 Ubuntu 机器上，所有临时地址的那一行后面都会有一个 `temporary`，而永久地址则会有一个 `mngtmpaddr`。此外，我的运营商是中国联通，中国联通的 IPv6 地址是 2408 开头的。用这些信息，我们可以写出如下命令
 
 ```
-ip -6 addr show wlp4s0 | sed -nE 's/^.*inet6.*(2408[0-9a-f:]+).*mngtmpaddr.*$/\1/p
+ip -6 addr show wlp4s0 | sed -nE 's/^.*inet6.*(2408[0-9a-f:]+).*mngtmpaddr.*$/\1/p'
 ```
 
 因此，在 `aliyun_ddns_config.sh` 中，我们要加上
 
 ```
-MACHINE_IPV6=$(ip -6 addr show wlp4s0 | sed -nE 's/^.*inet6.*(2408[0-9a-f:]+).*mngtmpaddr.*$/\1/p)
+MACHINE_IPV6=$(ip -6 addr show wlp4s0 | sed -nE 's/^.*inet6.*(2408[0-9a-f:]+).*mngtmpaddr.*$/\1/p')
 ```
 
 ## 遇到问题
